@@ -22,22 +22,29 @@ runtime package.
 The initial build host and default deployment host are `ubuntu-1`. The build
 host stays in the utility manifest. Deploy, status, rollback, and removal accept
 a host override, so the same architecture-independent package can be installed
-on other compatible machines. The workflow checks the host's OS ID and version
-before it changes package state. Retain built `.deb` files on the Mac to support
-rollback; a companion `.commit` file records the tag's source commit.
+on other compatible machines. All commands accept `--user USER` to select the
+SSH login name for remote connections; without it, SSH uses its configured
+default. The selected account needs `dpkg-deb` and writable `/tmp` on the build
+host, and root or sudo access for package installation or removal. The workflow
+checks the host's OS ID and version before it changes package state. Retain
+built `.deb` files on the Mac to support rollback; a companion `.commit` file
+records the tag's source commit.
 
 The intended interface is:
 
 ```bash
 cd ~/projects/cli-deploy
 ./deploy-cli.sh build command-complete v0.2.0
+./deploy-cli.sh build command-complete v0.2.0 --user jessedc42
 ./deploy-cli.sh deploy command-complete v0.2.0
 ./deploy-cli.sh deploy command-complete v0.2.0 --host another-ubuntu
+./deploy-cli.sh deploy command-complete v0.2.0 --user jessedc42
+./deploy-cli.sh deploy command-complete v0.2.0 --host another-ubuntu --user jessedc42
 ./deploy-cli.sh status command-complete
-./deploy-cli.sh status command-complete --host another-ubuntu
+./deploy-cli.sh status command-complete --host another-ubuntu --user jessedc42
 ./deploy-cli.sh rollback command-complete 0.2.0
-./deploy-cli.sh rollback command-complete 0.2.0 --host another-ubuntu
-./deploy-cli.sh remove command-complete
+./deploy-cli.sh rollback command-complete 0.2.0 --host another-ubuntu --user jessedc42
+./deploy-cli.sh remove command-complete --user jessedc42
 ```
 
 `build` leaves `artifacts/command-complete/0.2.0/command-complete_0.2.0_all.deb`

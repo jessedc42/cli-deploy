@@ -10,22 +10,42 @@ DEFAULT_HOST=ubuntu-1
 usage() {
     cat <<'USAGE'
 Usage:
-  deploy-cli.sh build <utility> <tag>
-  deploy-cli.sh deploy <utility> <tag> [--host HOST]
-  deploy-cli.sh status <utility> [--host HOST]
-  deploy-cli.sh rollback <utility> <version> [--host HOST]
-  deploy-cli.sh remove <utility> [--host HOST]
+  deploy-cli.sh build <utility> <tag> [--user USER]
+  deploy-cli.sh deploy <utility> <tag> [--host HOST] [--user USER]
+  deploy-cli.sh status <utility> [--host HOST] [--user USER]
+  deploy-cli.sh rollback <utility> <version> [--host HOST] [--user USER]
+  deploy-cli.sh remove <utility> [--host HOST] [--user USER]
   deploy-cli.sh --help
 
 Build a tagged utility release as a local .deb, deploy it to a compatible
 Debian-family host, inspect the installed version, restore a retained version,
-or remove the package. The default deployment host is ubuntu-1.
+or remove the package. The default deployment host is ubuntu-1. Use --user USER
+to override the SSH login name for remote connections.
 USAGE
 }
 
 fail() {
     printf 'error: %s\n' "$*" >&2
     exit 1
+}
+
+validate_user() {
+    user_to_check=$1
+    case "$user_to_check" in
+        ''|[!A-Za-z0-9_]*|*[!A-Za-z0-9_.-]*) fail "invalid SSH user: $user_to_check" ;;
+    esac
+}
+
+connection_target() {
+    host_for_connection=$1
+    if [ -n "$connection_user" ]; then
+        case "$host_for_connection" in
+            *@*) fail "use --host with a host name or SSH alias when --user is specified" ;;
+        esac
+        printf '%s@%s' "$connection_user" "$host_for_connection"
+    else
+        printf '%s' "$host_for_connection"
+    fi
 }
 
 load_manifest() {
@@ -144,7 +164,7 @@ validate_manifest_metadata() {
 check_compatible_host() {
     host_to_check=$1
     validate_host "$host_to_check"
-    ssh "$host_to_check" "test -r /etc/os-release && . /etc/os-release && test \"\$ID\" = '$OS_ID' && test \"\$VERSION_ID\" = '$OS_VERSION_ID'" || fail "$host_to_check must be $SUPPORTED_SYSTEM and reachable over SSH"
+    ssh "$(connection_target "$host_to_check")" "test -r /etc/os-release && . /etc/os-release && test \"\$ID\" = '$OS_ID' && test \"\$VERSION_ID\" = '$OS_VERSION_ID'" || fail "$host_to_check must be $SUPPORTED_SYSTEM and reachable over SSH"
 }
 
 build_package() {
@@ -222,7 +242,7 @@ build_package() {
         return 0
     fi
     check_compatible_host "$BUILD_HOST"
-    ssh "$BUILD_HOST" 'command -v dpkg-deb >/dev/null 2>&1' || fail "dpkg-deb is not installed on build host $BUILD_HOST"
+    ssh "$(connection_target "$BUILD_HOST")" 'command -v dpkg-deb >/dev/null 2>&1' || fail "dpkg-deb is not installed on build host $BUILD_HOST"
     command -v python3 >/dev/null 2>&1 || fail "python3 is required to publish artifacts atomically"
     mkdir -p "$artifacts_parent"
     tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/cli-deploy.XXXXXX") || fail "could not create staging directory"
@@ -238,7 +258,7 @@ build_package() {
             prepared_dir=
         fi
         if [ -n "$remote_stage" ]; then
-            ssh "$BUILD_HOST" "rm -rf '$remote_stage'" >/dev/null 2>&1 || :
+            ssh "$(connection_target "$BUILD_HOST")" "rm -rf '$remote_stage'" >/dev/null 2>&1 || :
             remote_stage=
         fi
     }
@@ -275,7 +295,7 @@ CONTROL
 
     package_archive="$tmpdir/package.tar"
     tar -cpf "$package_archive" -C "$tmpdir" package || fail "could not archive staged package"
-    remote_stage_candidate=$(ssh "$BUILD_HOST" 'mktemp -d /tmp/cli-deploy.XXXXXX') || fail "could not create build directory on $BUILD_HOST"
+    remote_stage_candidate=$(ssh "$(connection_target "$BUILD_HOST")" 'mktemp -d /tmp/cli-deploy.XXXXXX') || fail "could not create build directory on $BUILD_HOST"
     case "$remote_stage_candidate" in
         /tmp/cli-deploy.*)
             remote_suffix=${remote_stage_candidate#/tmp/cli-deploy.}
@@ -284,11 +304,11 @@ CONTROL
         *) fail "unexpected build directory from $BUILD_HOST" ;;
     esac
     remote_stage=$remote_stage_candidate
-    scp "$package_archive" "$BUILD_HOST:$remote_stage/package.tar" || fail "could not transfer staged package to $BUILD_HOST"
-    ssh "$BUILD_HOST" "tar -xpf '$remote_stage/package.tar' -C '$remote_stage' && dpkg-deb --root-owner-group --build '$remote_stage/package' '$remote_stage/${PACKAGE}_${version}_${ARCHITECTURE}.deb'" || fail "dpkg-deb failed on $BUILD_HOST"
+    scp "$package_archive" "$(connection_target "$BUILD_HOST"):$remote_stage/package.tar" || fail "could not transfer staged package to $BUILD_HOST"
+    ssh "$(connection_target "$BUILD_HOST")" "tar -xpf '$remote_stage/package.tar' -C '$remote_stage' && dpkg-deb --root-owner-group --build '$remote_stage/package' '$remote_stage/${PACKAGE}_${version}_${ARCHITECTURE}.deb'" || fail "dpkg-deb failed on $BUILD_HOST"
 
     prepared_artifact="$prepared_dir/${PACKAGE}_${version}_${ARCHITECTURE}.deb"
-    scp "$BUILD_HOST:$remote_stage/${PACKAGE}_${version}_${ARCHITECTURE}.deb" "$prepared_artifact" || fail "could not retrieve package artifact from $BUILD_HOST"
+    scp "$(connection_target "$BUILD_HOST"):$remote_stage/${PACKAGE}_${version}_${ARCHITECTURE}.deb" "$prepared_artifact" || fail "could not retrieve package artifact from $BUILD_HOST"
     printf '%s\n' "$commit" > "$prepared_artifact.commit"
     if ! python3 - "$prepared_dir" "$artifacts_dir" <<'PUBLISH'
 import os
@@ -315,17 +335,48 @@ PUBLISH
     printf 'Built %s\n' "$artifact"
 }
 
+select_build_options() {
+    target_host=$BUILD_HOST
+    connection_user=
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --user)
+                [ "$#" -ge 2 ] || fail "--user requires a username"
+                connection_user=$2
+                validate_user "$connection_user"
+                shift 2
+                ;;
+            *) fail "unexpected build option: $1" ;;
+        esac
+    done
+    if [ -n "$connection_user" ]; then
+        case "$target_host" in *@*) fail "use --host with a host name or SSH alias when --user is specified" ;; esac
+    fi
+}
+
 select_host() {
     target_host=$DEFAULT_HOST
-    case "$#" in
-        0) ;;
-        2)
-            [ "$1" = --host ] || fail "expected --host HOST"
-            target_host=$2
-            ;;
-        *) fail "expected optional --host HOST" ;;
-    esac
+    connection_user=
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --host)
+                [ "$#" -ge 2 ] || fail "--host requires a host name"
+                target_host=$2
+                shift 2
+                ;;
+            --user)
+                [ "$#" -ge 2 ] || fail "--user requires a username"
+                connection_user=$2
+                validate_user "$connection_user"
+                shift 2
+                ;;
+            *) fail "unexpected option: $1" ;;
+        esac
+    done
     validate_host "$target_host"
+    if [ -n "$connection_user" ]; then
+        case "$target_host" in *@*) fail "use --host with a host name or SSH alias when --user is specified" ;; esac
+    fi
 }
 
 validate_version() {
@@ -340,10 +391,10 @@ validate_version() {
 query_installed_package() {
     host_to_query=$1
     installed_version=
-    if ! ssh "$host_to_query" 'test -r /var/lib/dpkg/status' >/dev/null 2>&1; then
+    if ! ssh "$(connection_target "$host_to_query")" 'test -r /var/lib/dpkg/status' >/dev/null 2>&1; then
         fail "dpkg status database is unavailable on $host_to_query"
     fi
-    if query_result=$(ssh "$host_to_query" "if dpkg-query -s '$PACKAGE' >/dev/null 2>&1; then dpkg-query -W -f='\${db:Status-Status}|\${Version}' '$PACKAGE'; else query_status=\$?; if [ \"\$query_status\" -eq 1 ]; then printf '%s' '__CLI_DEPLOY_ABSENT__'; else exit \"\$query_status\"; fi; fi"); then
+    if query_result=$(ssh "$(connection_target "$host_to_query")" "if dpkg-query -s '$PACKAGE' >/dev/null 2>&1; then dpkg-query -W -f='\${db:Status-Status}|\${Version}' '$PACKAGE'; else query_status=\$?; if [ \"\$query_status\" -eq 1 ]; then printf '%s' '__CLI_DEPLOY_ABSENT__'; else exit \"\$query_status\"; fi; fi"); then
         if [ "$query_result" = __CLI_DEPLOY_ABSENT__ ]; then
             return 0
         fi
@@ -372,7 +423,7 @@ show_status() {
         fail "expected $PACKAGE $expected_version on $target_host, found $installed_version"
     fi
     expected_command_path="/usr/lib/$PACKAGE/$installed_version/$ENTRYPOINT"
-    resolved_command_path=$(ssh "$target_host" "readlink -f '/usr/bin/$COMMAND'") || fail "could not resolve /usr/bin/$COMMAND on $target_host"
+    resolved_command_path=$(ssh "$(connection_target "$target_host")" "readlink -f '/usr/bin/$COMMAND'") || fail "could not resolve /usr/bin/$COMMAND on $target_host"
     [ "$resolved_command_path" = "$expected_command_path" ] || fail "/usr/bin/$COMMAND resolves to $resolved_command_path; expected $expected_command_path"
     printf '%s %s\n/usr/bin/%s\n' "$PACKAGE" "$installed_version" "$COMMAND"
 }
@@ -383,8 +434,8 @@ install_artifact() {
     expected_version=$3
     [ -f "$artifact_path" ] || fail "package artifact does not exist: $artifact_path"
 
-    ssh "$target_host" 'command -v dpkg-deb >/dev/null 2>&1' || fail "dpkg-deb is not available on $target_host"
-    remote_package=$(ssh "$target_host" 'mktemp --suffix=.deb /tmp/cli-deploy.XXXXXX') || fail "could not create a temporary package path on $target_host"
+    ssh "$(connection_target "$target_host")" 'command -v dpkg-deb >/dev/null 2>&1' || fail "dpkg-deb is not available on $target_host"
+    remote_package=$(ssh "$(connection_target "$target_host")" 'mktemp --suffix=.deb /tmp/cli-deploy.XXXXXX') || fail "could not create a temporary package path on $target_host"
     case "$remote_package" in
         /tmp/cli-deploy.*.deb)
             remote_suffix=${remote_package#/tmp/cli-deploy.}
@@ -393,8 +444,8 @@ install_artifact() {
             ;;
         *) fail "unexpected temporary package path from $target_host" ;;
     esac
-    scp "$artifact_path" "$target_host:$remote_package" || fail "could not copy package to $target_host; temporary file: $remote_package"
-    package_metadata=$(ssh "$target_host" "dpkg-deb -f '$remote_package' Package Version Architecture") || fail "could not read transferred package metadata; retained file: $remote_package"
+    scp "$artifact_path" "$(connection_target "$target_host"):$remote_package" || fail "could not copy package to $target_host; temporary file: $remote_package"
+    package_metadata=$(ssh "$(connection_target "$target_host")" "dpkg-deb -f '$remote_package' Package Version Architecture") || fail "could not read transferred package metadata; retained file: $remote_package"
     actual_package=$(printf '%s\n' "$package_metadata" | awk -F': ' '$1 == "Package" { print $2; exit }')
     actual_version=$(printf '%s\n' "$package_metadata" | awk -F': ' '$1 == "Version" { print $2; exit }')
     actual_architecture=$(printf '%s\n' "$package_metadata" | awk -F': ' '$1 == "Architecture" { print $2; exit }')
@@ -406,11 +457,11 @@ install_artifact() {
     if [ "$allow_downgrade" = yes ]; then
         apt_options='-y --allow-downgrades'
     fi
-    if ! ssh -t "$target_host" "if [ \"\$(id -u)\" -eq 0 ]; then apt install $apt_options '$remote_package'; else sudo apt install $apt_options '$remote_package'; fi"; then
+    if ! ssh -t "$(connection_target "$target_host")" "if [ \"\$(id -u)\" -eq 0 ]; then apt install $apt_options '$remote_package'; else sudo apt install $apt_options '$remote_package'; fi"; then
         printf 'error: package installation failed on %s; retained file: %s\n' "$target_host" "$remote_package" >&2
         return 1
     fi
-    if ! ssh "$target_host" "rm -f '$remote_package'"; then
+    if ! ssh "$(connection_target "$target_host")" "rm -f '$remote_package'"; then
         printf 'warning: installed package, but could not remove temporary file %s on %s\n' "$remote_package" "$target_host" >&2
     fi
 }
@@ -474,10 +525,10 @@ rollback_release() {
 
 remove_package() {
     check_compatible_host "$target_host"
-    ssh -t "$target_host" "if [ \"\$(id -u)\" -eq 0 ]; then apt remove -y '$PACKAGE'; else sudo apt remove -y '$PACKAGE'; fi" || fail "could not remove $PACKAGE on $target_host"
+    ssh -t "$(connection_target "$target_host")" "if [ \"\$(id -u)\" -eq 0 ]; then apt remove -y '$PACKAGE'; else sudo apt remove -y '$PACKAGE'; fi" || fail "could not remove $PACKAGE on $target_host"
     query_installed_package "$target_host"
     [ -z "$installed_version" ] || fail "$PACKAGE is still installed on $target_host"
-    ssh "$target_host" "test ! -e '/usr/bin/$COMMAND' && test ! -L '/usr/bin/$COMMAND'" || fail "/usr/bin/$COMMAND remains after removing $PACKAGE on $target_host"
+    ssh "$(connection_target "$target_host")" "test ! -e '/usr/bin/$COMMAND' && test ! -L '/usr/bin/$COMMAND'" || fail "/usr/bin/$COMMAND remains after removing $PACKAGE on $target_host"
     printf 'Removed %s from %s\n' "$PACKAGE" "$target_host"
 }
 
@@ -508,11 +559,14 @@ load_manifest "$utility_name"
 
 case "$command_name" in
     build)
-        [ "$#" -eq 1 ] || fail "usage: build <utility> <tag>"
-        build_package "$1"
+        [ "$#" -ge 1 ] || fail "usage: build <utility> <tag> [--user USER]"
+        release_tag=$1
+        shift
+        select_build_options "$@"
+        build_package "$release_tag"
         ;;
     deploy)
-        [ "$#" -ge 1 ] || fail "usage: deploy <utility> <tag> [--host HOST]"
+        [ "$#" -ge 1 ] || fail "usage: deploy <utility> <tag> [--host HOST] [--user USER]"
         release_tag=$1
         shift
         select_host "$@"
@@ -523,7 +577,7 @@ case "$command_name" in
         show_status
         ;;
     rollback)
-        [ "$#" -ge 1 ] || fail "usage: rollback <utility> <version> [--host HOST]"
+        [ "$#" -ge 1 ] || fail "usage: rollback <utility> <version> [--host HOST] [--user USER]"
         release_version=$1
         shift
         select_host "$@"
