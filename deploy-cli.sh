@@ -201,19 +201,24 @@ build_package() {
     declared_version=$(git -C "$REPO_DIR" show "$commit:$VERSION_FILE" 2>/dev/null | awk -v name="$VERSION_NAME" '
         $0 ~ ("^" name "[[:space:]]*=") {
             count++
-            if ($0 !~ ("^" name "[[:space:]]*=[[:space:]]*\"(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\"([[:space:]]*#.*)?$")) {
+            component = "(0|[1-9][0-9]*)"
+            version_re = component "\\." component "\\." component
+            single_quote = sprintf("%c", 39)
+            double_quote = sprintf("%c", 34)
+            quote_class = "[" double_quote single_quote "]"
+            if ($0 !~ ("^" name "[[:space:]]*=[[:space:]]*(" double_quote version_re double_quote "|" single_quote version_re single_quote ")([[:space:]]*#.*)?$")) {
                 invalid = 1
             } else {
                 value = $0
-                sub("^" name "[[:space:]]*=[[:space:]]*\"", "", value)
-                sub("\"([[:space:]]*#.*)?$", "", value)
+                sub("^" name "[[:space:]]*=[[:space:]]*" quote_class, "", value)
+                sub(quote_class "([[:space:]]*#.*)?$", "", value)
             }
         }
         END {
             if (invalid || count != 1) exit 1
             print value
         }
-    ') || fail "expected exactly one top-level literal $VERSION_NAME X.Y.Z assignment in $tag:$VERSION_FILE"
+    ') || fail "expected exactly one top-level literal $VERSION_NAME SemVer MAJOR.MINOR.PATCH assignment in $tag:$VERSION_FILE"
     [ "$declared_version" = "$version" ] || fail "tag version $version does not match $VERSION_NAME=$declared_version in $tag"
 
     entrypoint_listed=0

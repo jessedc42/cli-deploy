@@ -2,7 +2,7 @@
 
 `deploy-cli.sh` is a shared, manifest-driven workflow for building small
 command-line utilities as local Debian packages and deploying them to compatible
-machines. The first utility manifest is for `command-complete`.
+machines. Manifests are provided for `command-complete` and `command-search`.
 
 Releases use the stable subset of Semantic Versioning 2.0.0: `MAJOR.MINOR.PATCH`
 with no leading zeroes (for example, `0.2.0`). Git tags add the `v` prefix,
@@ -15,9 +15,12 @@ excluded.
 The package is a low-profile `.deb`, not an APT repository. The current
 `command-complete` manifest permits Ubuntu 24.04, which is the platform the
 utility documents. Other distributions need their own package and compatibility
-configuration. The utility uses Python 3.10+ and the standard library. Its shell
-integration file is listed for setup documentation and is not part of the
-runtime package.
+configuration. Both utilities use Python 3.10+ and the standard library. The
+`command-complete` manifest lists its application module, shared terminal and
+version modules, and both compressed catalogs. The `command-search` manifest
+lists its entry point, imported project modules, shared completion support, and
+the Ubuntu catalog and search database. The shell integration file is listed
+for setup documentation and is not part of the runtime package.
 
 The initial build host and default deployment host are `ubuntu-1`. The build
 host stays in the utility manifest. Deploy, status, rollback, and removal accept
@@ -45,6 +48,8 @@ cd ~/projects/cli-deploy
 ./deploy-cli.sh rollback command-complete 0.2.0
 ./deploy-cli.sh rollback command-complete 0.2.0 --host another-ubuntu --user jessedc42
 ./deploy-cli.sh remove command-complete --user jessedc42
+./deploy-cli.sh build command-search v0.5.0 --user jessedc42
+./deploy-cli.sh deploy command-search v0.5.0 --user jessedc42
 ```
 
 `build` leaves `artifacts/command-complete/0.2.0/command-complete_0.2.0_all.deb`

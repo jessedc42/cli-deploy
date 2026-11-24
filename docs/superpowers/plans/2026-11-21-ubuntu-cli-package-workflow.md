@@ -37,16 +37,17 @@
 ## File map
 
 - Create `deploy-cli.sh`: shared build, transfer, install, inspect, rollback, and removal entry points; preserve Bash 3.2 compatibility.
-- Create `utilities/command-complete.conf`: package identity, source repository path, tag/version source, executable entry point, runtime files, package maintainer and description, supported OS ID/version, Ubuntu 24.04 build host (`ubuntu-1`), and default deployment host (`ubuntu-1`).
+- Create `utilities/command-complete.conf` and `utilities/command-search.conf`: package identity, source repository path, tag/version source, executable entry point, runtime files, package maintainer and description, supported OS ID/version, Ubuntu 24.04 build host (`ubuntu-1`), and default deployment host (`ubuntu-1`).
 - Create `README.md`: command examples, release prerequisites, host override, install inspection, rollback, removal, and adding a future utility manifest.
 - Create `.gitignore`: ignore retained build artifacts and temporary staging directories.
 - Modify `command-complete/docs/superpowers/specs/2026-11-21-ubuntu-cli-package-workflow-design.md` only if implementation choices require a material design change.
 
-### Task 1: Define the shared workflow interface and first manifest
+### Task 1: Define the shared workflow interface and utility manifests
 
 **Files:**
 - Create: `deploy-cli.sh`
 - Create: `utilities/command-complete.conf`
+- Create: `utilities/command-search.conf`
 - Create: `README.md`
 
 **Interfaces:**
@@ -57,8 +58,9 @@
 - `deploy-cli.sh remove <utility> [--host HOST]` removes the package through `apt`.
 - Manifests use dependency-free, shell-readable key/value records; the script parses values as data and never sources the manifest. The build host is fixed by the manifest; the deployment host can be overridden per invocation.
 
-- [ ] Create the three files with the command interface and manifest fields above; document that the package is tagged-release-only and host override is per invocation.
-- [ ] In `command-complete.conf`, list `command_complete.py`, `catalog.json.gz`, and `catalog-ubuntu.json.gz`; record `shell-integration.sh` as optional documentation/setup content, not a runtime file for the package.
+- [ ] Create the shared script, utility manifests, and README with the command interface and manifest fields above; document that packages are tagged-release-only and host override is per invocation.
+- [ ] In `command-complete.conf`, list `command_complete.py`, `terminal_keys.py`, `version.py`, `catalog.json.gz`, and `catalog-ubuntu.json.gz`; record `shell-integration.sh` as optional documentation/setup content, not a runtime file for the package.
+- [ ] In `command-search.conf`, list its entry point, imported project modules, the Ubuntu completion catalog, and the Ubuntu search database; keep it independent of the `command-complete` package installation.
 
 ### Task 2: Build a self-contained versioned `.deb`
 
@@ -71,7 +73,7 @@
 - Produces a local artifact named `<package>_<version>_all.deb`, an adjacent `.commit` file recording its source commit, and package metadata identifying the version and Ubuntu 24.04/Python 3.10+ runtime requirement.
 - Installs payload files beneath `/usr/lib/<package>/<version>/` and provides the stable command under `/usr/bin/` as a symlink to the versioned executable.
 
-- [ ] Resolve the annotated tag object and commit once; require exactly one top-level literal X.Y.Z assignment matching the tag version, and use the immutable commit for every source read.
+- [ ] Resolve the annotated tag object and commit once; require exactly one top-level literal SemVer MAJOR.MINOR.PATCH assignment matching the tag version (single- or double-quoted), and use the immutable commit for every source read.
 - [ ] Stage only manifest-listed regular files, generate package control metadata and a versioned `/usr/bin` symlink, then archive the staging tree without following symlinks.
 - [ ] Build on the configured Ubuntu host with `dpkg-deb --root-owner-group --build`; return the artifact and source commit record to the Mac.
 - [ ] Publish the `.deb` and `.commit` together by atomically renaming a prepared artifact directory; never overwrite a retained version.

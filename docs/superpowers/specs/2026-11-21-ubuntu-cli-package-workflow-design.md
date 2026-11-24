@@ -24,7 +24,8 @@ Create a small, repeatable workflow for deploying versioned command-line utiliti
 
 - `command-complete` is a Python 3.10+ standard-library application.
 - Its runtime consists of `command_complete.py` and both compressed catalogs. `shell-integration.sh` is an optional separate file for shell setup.
-- Its version is recorded in `command_complete.py`; release notes use annotated Git tags such as `v0.2.0`.
+- Its version is recorded in `version.py`; `command_complete.py` imports both `version.py` and `terminal_keys.py` at runtime. Release notes use annotated Git tags such as `v0.2.0`.
+- `command-search` is a separate command and package sharing the `command-complete` source repository and version. It uses the completion module, shared terminal/version modules, and a platform catalog with its prebuilt search database.
 - The project currently contains uncommitted edits in `README.md`, `test_terminal.py`, and `test-ubuntu.sh`; these must be preserved.
 - The initial default deploy target is `ubuntu-1`, and the user has root access there. The target must be selectable at deploy time so the same package can be installed on additional compatible hosts.
 
